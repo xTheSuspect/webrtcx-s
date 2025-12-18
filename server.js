@@ -1,39 +1,69 @@
 import { WebSocketServer } from "ws";
 
-const wss = new WebSocketServer({
-  port: process.env.PORT || 8080
-});
+const PORT = process.env.PORT || 8080;
 
+const wss = new WebSocketServer({ port: PORT });
 const rooms = new Map();
 
+console.log("✅ Signaling server running on port", PORT);
+
 wss.on("connection", ws => {
-  let room = null;
+  let roomId = null;
 
-  ws.on("message", msg => {
-    const data = JSON.parse(msg);
-
-    if (data.type === "join") {
-      room = data.room;
-      if (!rooms.has(room)) rooms.set(room, []);
-      rooms.get(room).push(ws);
+  ws.on("message", message => {
+    let data;
+    try {
+      data = JSON.parse(message);
+    } catch {
       return;
     }
 
-    if (room && rooms.has(room)) {
-      for (const client of rooms.get(room)) {
-        if (client !== ws && client.readyState === 1) {
-          client.send(JSON.stringify(data));
-        }
+    /* ===== JOIN ROOM ===== */
+    if (data.type === "join") {
+      roomId = data.room;
+
+      if (!rooms.has(roomId)) {
+        rooms.set(roomId, []);
       }
+
+      const room = rooms.get(roomId);
+      room.push(ws);
+
+      console.log(`👤 Client joined room ${roomId} (${room.length})`);
+
+      // Notify peers when both are present
+      if (room.length === 2) {
+        room.forEach(client => {
+          if (client.readyState === 1) {
+            client.send(JSON.stringify({ type: "peer-joined" }));
+          }
+        });
+      }
+      return;
     }
+
+    /* ===== RELAY SIGNALING DATA ===== */
+    if (!roomId || !rooms.has(roomId)) return;
+
+    const room = rooms.get(roomId);
+    room.forEach(client => {
+      if (client !== ws && client.readyState === 1) {
+        client.send(JSON.stringify(data));
+      }
+    });
   });
 
   ws.on("close", () => {
-    if (room && rooms.has(room)) {
-      rooms.set(room, rooms.get(room).filter(c => c !== ws));
-      if (rooms.get(room).length === 0) {
-        rooms.delete(room);
-      }
+    if (!roomId || !rooms.has(roomId)) return;
+
+    const room = rooms.get(roomId).filter(c => c !== ws);
+
+    if (room.length === 0) {
+      rooms.delete(roomId);
+      console.log(`🗑 Room ${roomId} deleted`);
+    } else {
+      rooms.set(roomId, room);
+      console.log(`❌ Client left room ${roomId}`);
     }
   });
 });
